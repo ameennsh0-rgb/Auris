@@ -118,18 +118,36 @@ internal fun FluidArtBackdrop(
             tick // redraw with the frame clock
             if (shader != null) {
                 val p = progressNow().coerceIn(0f, 1f)
-                val s = p * p * (3f - 2f * p)
+                // Spots are rolled afresh as each mix starts.
+                if (p > 0f && !fog.live) {
+                    fog.roll()
+                    fog.live = true
+                } else if (p <= 0f) {
+                    fog.live = false
+                }
                 val k = (settle.seconds / SETTLE_SECONDS).coerceIn(0f, 1f).let { it * it * (3f - 2f * it) }
                 val before = settle.from
+                // The field of this cover's colours stays put until the fog has
+                // covered it, then reads as the next cover's: the frame the mix
+                // ends on is the frame the next cover starts from.
+                val atEnd = p >= 0.995f
                 for (i in 0 until PALETTE_FLOATS) {
-                    val target = palA[i] + (palB[i] - palA[i]) * s
+                    val target = if (atEnd) palB[i] else palA[i]
                     shown[i] = if (before != null && k < 1f) before[i] + (target - before[i]) * k else target
                 }
                 shader.setFloatUniform("res", size.width, size.height)
                 shader.setFloatUniform("uPhase", phase)
                 shader.setFloatUniform("uSurge", sin(PI.toFloat() * p))
+                shader.setFloatUniform("uP", p)
                 for (c in 0 until PALETTE_SIZE) {
                     shader.setFloatUniform("c$c", shown[c * 3], shown[c * 3 + 1], shown[c * 3 + 2])
+                    // What the fog reveals; at rest it is the same field.
+                    val src = if (p > 0f) palB else shown
+                    shader.setFloatUniform("b$c", src[c * 3], src[c * 3 + 1], src[c * 3 + 2])
+                }
+                for (i in 0 until FOG_SPOTS) {
+                    shader.setFloatUniform("sp$i", fog.x[i], fog.y[i], fog.radius(i, p), fog.seed[i])
+                    shader.setFloatUniform("sh$i", fog.sx[i], fog.sy[i], fog.angle[i], 0f)
                 }
                 drawRect(ShaderBrush(shader))
             }
@@ -232,12 +250,25 @@ private const val FLUID_AGSL = """
 uniform float2 res;
 uniform float uPhase;
 uniform float uSurge;
+uniform float uP;
 uniform float3 c0;
 uniform float3 c1;
 uniform float3 c2;
 uniform float3 c3;
 uniform float3 c4;
 uniform float3 c5;
+uniform float3 b0;
+uniform float3 b1;
+uniform float3 b2;
+uniform float3 b3;
+uniform float3 b4;
+uniform float3 b5;
+uniform float4 sp0;
+uniform float4 sp1;
+uniform float4 sp2;
+uniform float4 sh0;
+uniform float4 sh1;
+uniform float4 sh2;
 
 float2 rot2(float2 v, float a) {
     float c = cos(a);
@@ -251,9 +282,46 @@ float blobW(float2 s, float2 home, float2 w, float o) {
     return exp(-dot(d, d) / 0.085);
 }
 
+float hash2(float2 p) {
+    return fract(sin(dot(p, float2(127.1, 311.7))) * 43758.5453);
+}
+
+float vnoise(float2 p) {
+    float2 i = floor(p);
+    float2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash2(i), hash2(i + float2(1.0, 0.0)), f.x),
+               mix(hash2(i + float2(0.0, 1.0)), hash2(i + float2(1.0, 1.0)), f.x), f.y);
+}
+
+float fbm(float2 p) {
+    float a = 0.5;
+    float t = 0.0;
+    for (int k = 0; k < 4; k++) {
+        t += a * vnoise(p);
+        p = p * 2.03 + float2(17.0, 9.0);
+        a *= 0.5;
+    }
+    return t;
+}
+
+// One patch of fog: a stretched, turned shape whose edge is pushed and pulled by
+// slowly moving noise, with a wide soft rim, so it is never a circle.
+float fogM(float2 uv, float2 asp, float4 sp, float4 sh) {
+    float2 q = (uv - sp.xy) * asp;
+    float ca = cos(sh.z);
+    float sa = sin(sh.z);
+    q = float2(ca * q.x + sa * q.y, -sa * q.x + ca * q.y) * sh.xy;
+    float warp = fbm(uv * 3.2 * asp + sp.w * 7.0 + uP * 1.6) - 0.5;
+    float dd = length(q) + warp * 0.55;
+    float born = smoothstep(0.0, 0.25, sp.z);
+    return (1.0 - smoothstep(sp.z - 0.42, sp.z, dd)) * born;
+}
+
 half4 main(float2 fc) {
     float2 uv = fc / res;
     float2 s = uv - 0.5;
+    float2 asp = float2(1.0, res.y / res.x);
 
     // The whole field twists about the middle while a mix runs.
     float fall = 1.0 - clamp(length(s) * 1.6, 0.0, 1.0);
@@ -266,8 +334,13 @@ half4 main(float2 fc) {
     float w5 = blobW(s, float2(0.02, 0.44), float2(1.4, 0.9), 5.2);
 
     float base = 0.30;
-    float3 c = (c0 * base + c1 * w1 + c2 * w2 + c3 * w3 + c4 * w4 + c5 * w5) /
-        (base + w1 + w2 + w3 + w4 + w5);
+    float den = base + w1 + w2 + w3 + w4 + w5;
+    float3 cA = (c0 * base + c1 * w1 + c2 * w2 + c3 * w3 + c4 * w4 + c5 * w5) / den;
+    float3 cB = (b0 * base + b1 * w1 + b2 * w2 + b3 * w3 + b4 * w4 + b5 * w5) / den;
+
+    float m = max(fogM(uv, asp, sp0, sh0), max(fogM(uv, asp, sp1, sh1), fogM(uv, asp, sp2, sh2)));
+    m = max(m, smoothstep(0.93, 1.0, uP));
+    float3 c = mix(cA, cB, m);
 
     float lum = dot(c, float3(0.299, 0.587, 0.114));
     c = mix(float3(lum), c, 1.45);
