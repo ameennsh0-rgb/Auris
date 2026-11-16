@@ -48,6 +48,16 @@ jobs:
       - name: Build dev debug APK
         run: ./gradlew assembleDevDebug --stacktrace
 
+      # Fails the run if the APK was not signed with the fixed key (Gradle
+      # quietly makes its own debug key when it can't use the one provided), so
+      # a build that can't update the installed app is never published.
+      - name: Check the signing key
+        run: |
+          apk=$(ls app/build/outputs/apk/dev/debug/*.apk | head -1)
+          apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | tail -1)
+          "$apksigner" verify --print-certs "$apk" | tee certs.txt
+          grep -q "4f45218c067a867f9998e0f0a805dcb9314220f0727b0dbdc791281e6e5dc821" certs.txt
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
