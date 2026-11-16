@@ -21,6 +21,10 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.ShaderBrush
@@ -29,6 +33,7 @@ import kotlinx.coroutines.flow.first
 import kotlin.math.PI
 import kotlin.math.max
 import kotlin.math.pow
+import kotlin.math.roundToInt
 import kotlin.random.Random
 import kotlin.math.min
 import kotlin.math.sin
@@ -105,7 +110,7 @@ internal fun FluidArtBackdrop(
                 val dt = ((now - last) / 1_000_000_000f).coerceIn(0f, 0.1f)
                 last = now
                 val p = progressNow().coerceIn(0f, 1f)
-                phase += dt * PHASE_SPEED * sin(PI.toFloat() * p)
+                phase += dt * PHASE_SPEED * mixFlow(p)
                 settle.seconds += dt
                 tick = now
                 val mixing = p > 0f && p < 1f
@@ -117,7 +122,25 @@ internal fun FluidArtBackdrop(
     }
 
     Box(modifier.fillMaxSize().background(Backdrop)) {
-        Canvas(Modifier.fillMaxSize()) {
+        // Drawn at a quarter of the size in each direction and stretched back up:
+        // fog has no detail a sixteenth of the pixels cannot hold, and the layer
+        // is rendered to its own small texture, so the shader runs on those pixels
+        // only. The stretch is smoothed, which only softens the fog further.
+        Canvas(
+            Modifier.fillMaxSize().layout { measurable, constraints ->
+                val w = (constraints.maxWidth / LOW_RES).roundToInt().coerceAtLeast(1)
+                val h = (constraints.maxHeight / LOW_RES).roundToInt().coerceAtLeast(1)
+                val placeable = measurable.measure(Constraints.fixed(w, h))
+                layout(constraints.maxWidth, constraints.maxHeight) {
+                    placeable.placeWithLayer(0, 0) {
+                        scaleX = LOW_RES
+                        scaleY = LOW_RES
+                        transformOrigin = TransformOrigin(0f, 0f)
+                        compositingStrategy = CompositingStrategy.Offscreen
+                    }
+                }
+            },
+        ) {
             tick // redraw with the frame clock
             if (shader != null) {
                 val p = progressNow().coerceIn(0f, 1f)
@@ -140,7 +163,7 @@ internal fun FluidArtBackdrop(
                 }
                 shader.setFloatUniform("res", size.width, size.height)
                 shader.setFloatUniform("uPhase", phase)
-                shader.setFloatUniform("uSurge", sin(PI.toFloat() * p))
+                shader.setFloatUniform("uSurge", mixFlow(p))
                 shader.setFloatUniform("uP", p)
                 for (c in 0 until PALETTE_SIZE) {
                     shader.setFloatUniform("c$c", shown[c * 3], shown[c * 3 + 1], shown[c * 3 + 2])
@@ -170,7 +193,17 @@ internal fun FluidArtBackdrop(
 
 private val Backdrop = Color(0xFF121212)
 
-/** Radians per second of the blobs' orbit, at the peak of a mix. */
+/** The backdrop is drawn at 1/LOW_RES of the screen's size in each direction. */
+private const val LOW_RES = 4f
+
+/**
+ * How much of its full, constant pace a mix is moving at: all of it, except for
+ * the first and last few per cent, where it ramps so that nothing starts or
+ * stops with a jump.
+ */
+private fun mixFlow(p: Float): Float = (min(p, 1f - p) / 0.08f).coerceIn(0f, 1f)
+
+/** Radians per second of the blobs' orbit during a mix. */
 private const val PHASE_SPEED = 1.3f
 
 /** How long a change of cover outside a mix takes to ease across. */
@@ -205,7 +238,7 @@ private class Fog {
             val z = pool.removeAt(Random.nextInt(pool.size))
             x[i] = z[0] + (Random.nextFloat() - 0.5f) * 0.12f
             y[i] = z[1] + (Random.nextFloat() - 0.5f) * 0.08f
-            delay[i] = Random.nextFloat() * 0.15f
+            delay[i] = Random.nextFloat() * 0.1f
             grow[i] = 0.95f + Random.nextFloat() * 0.25f
             sx[i] = 0.6f + Random.nextFloat()
             sy[i] = 0.6f + Random.nextFloat()
@@ -214,11 +247,11 @@ private class Fog {
         }
     }
 
-    /** How far spot [i] has grown at mix progress [p], in widths of the screen: slow to start, then quicker. */
+    /** How far spot [i] has grown at mix progress [p], in widths of the screen: at a constant pace. */
     fun radius(i: Int, p: Float): Float {
-        val u = ((p - delay[i]) / 0.85f).coerceIn(0f, 1f)
-        val eased = u * u * (3f - 2f * u)
-        return 2.8f * grow[i] * eased.pow(1.7f)
+        // At a constant pace, reaching the whole screen at nine tenths of the mix.
+        val u = ((p - delay[i]) / (0.9f - delay[i])).coerceIn(0f, 1f)
+        return 2.9f * grow[i] * u
     }
 }
 
@@ -348,7 +381,7 @@ float vnoise(float2 p) {
 float fbm(float2 p) {
     float a = 0.5;
     float t = 0.0;
-    for (int k = 0; k < 2; k++) {
+    for (int k = 0; k < 4; k++) {
         t += a * vnoise(p);
         p = p * 2.03 + float2(17.0, 9.0);
         a *= 0.5;
