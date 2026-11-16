@@ -14,6 +14,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.BlurEffect
+import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
@@ -23,9 +25,9 @@ import coil3.request.ImageRequest
 
 /**
  * The cover-art handoff that rides along with an Automix blend, in the manner
- * of Apple Music: as one song mixes into the next, the old sleeve eases back
- * and dissolves while the new one settles forward into its place, instead of
- * the picture simply swapping.
+ * of Apple Music: as one song mixes into the next, the old sleeve softens and
+ * bleeds into the new one, colours running together, instead of the picture
+ * simply swapping.
  *
  * ## How it is driven
  *
@@ -62,20 +64,20 @@ internal class AutomixArtMix {
 internal fun Modifier.automixIncoming(mix: AutomixArtMix): Modifier = graphicsLayer {
     if (mix.outgoing == null) return@graphicsLayer
     val settle = 1f - mix.progress.value
+    // Barely any motion: the new cover resolves where the old one was, as a bleed.
     val scale = 1f + INCOMING_OVERSIZE * settle * settle
     scaleX = scale
     scaleY = scale
 }
 
-private const val INCOMING_OVERSIZE = 0.09f
-private const val OUTGOING_SHRINK = 0.12f
-private const val OUTGOING_DRIFT = 0.035f
-private const val DURATION_MS = 1500
+private const val INCOMING_OVERSIZE = 0.025f
+private const val OUTGOING_BLUR_PX = 40f
+private const val DURATION_MS = 3200
 
 /** How long after a blend ends a cover change still counts as part of it. */
 private const val AFTER_MIX_GRACE_MS = 2500L
 
-private val ArtMixEasing = CubicBezierEasing(0.32f, 0.72f, 0f, 1f)
+private val ArtMixEasing = CubicBezierEasing(0.4f, 0f, 0.2f, 1f)
 private val SleeveCorners = RoundedCornerShape(8.dp)
 
 private fun nowMs(): Long = System.nanoTime() / 1_000_000L
@@ -136,14 +138,12 @@ internal fun AutomixOutgoingArt(mix: AutomixArtMix, modifier: Modifier = Modifie
             .fillMaxSize()
             .graphicsLayer {
                 val p = mix.progress.value
-                val scale = 1f - OUTGOING_SHRINK * p
-                scaleX = scale
-                scaleY = scale
-                translationX = -size.width * OUTGOING_DRIFT * p
-                // Held opaque for the first stretch, so the old sleeve is
-                // still plainly there as it starts to recede, then gone.
-                alpha = (1f - ((p - 0.15f) / 0.85f).coerceIn(0f, 1f)).let { it * it }
-                // Rounded in its own space, so the corners shrink with it.
+                // The old cover stays full size and melts into the new one:
+                // it softens as it fades, so the colours run together rather
+                // than one picture being swapped for the other.
+                alpha = 1f - p
+                val blur = OUTGOING_BLUR_PX * p
+                renderEffect = if (blur > 0.5f) BlurEffect(blur, blur, TileMode.Clamp) else null
                 shape = SleeveCorners
                 clip = true
             },
