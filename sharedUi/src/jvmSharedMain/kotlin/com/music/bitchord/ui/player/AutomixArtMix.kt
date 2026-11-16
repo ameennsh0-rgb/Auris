@@ -140,22 +140,18 @@ internal fun rememberAutomixArtMix(
 }
 
 /**
- * The cover while a blend is drawing it, in Apple Music's choreography: the
- * old cover holds at full strength for the first quarter of the mix, dissolves
- * into the next one across the middle half, and the next one has it to itself
- * for the last quarter. Over the same stretch the old cover recedes a little
- * (to 96%) while the new one settles up to full size, which gives the swap some
- * weight instead of a flat fade. Draws nothing when no blend is running.
+ * The cover while a blend is drawing it: the old cover simply fades into the new
+ * one, smoothly, across the whole length of the mix. No blur, no scaling, no
+ * swirl - the swirling is the backdrop's, and it is made of the covers' colours,
+ * never of the covers themselves.
  *
- * No blur here: the swirling backdrop behind carries the soft look, and plain
- * layers are the cheapest thing a GPU can composite. The old cover fades out
- * over an opaque new one rather than the new one fading in beneath it:
- * cross-fading two partly transparent layers dips the picture mid-way over the
- * dark backing behind, and this never does.
+ * The old cover fades out over an opaque new one rather than the new one fading
+ * in beneath it: cross-fading two partly transparent layers dips the picture
+ * mid-way over the dark backing behind, and this never does.
  *
  * [hero] draws it as the full-bleed banner rather than the card: no corners,
- * no breathing scale (the banner is cropped to the stage), and [imageModifier]
- * carries the banner's own crop so both covers sit exactly where it does.
+ * and [imageModifier] carries the banner's own crop so both covers sit exactly
+ * where it does.
  */
 @Composable
 internal fun AutomixBleedArt(
@@ -180,16 +176,7 @@ internal fun AutomixBleedArt(
             model = incoming,
             contentDescription = null,
             contentScale = ContentScale.Crop,
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer {
-                    if (!hero) {
-                        val s = BREATH_MIN + (1f - BREATH_MIN) * dissolve(mix.progress.value)
-                        scaleX = s
-                        scaleY = s
-                    }
-                }
-                .then(imageModifier),
+            modifier = Modifier.fillMaxSize().then(imageModifier),
         )
         AsyncImage(
             model = outgoing,
@@ -197,25 +184,14 @@ internal fun AutomixBleedArt(
             contentScale = ContentScale.Crop,
             modifier = Modifier
                 .fillMaxSize()
-                .graphicsLayer {
-                    val d = dissolve(mix.progress.value)
-                    alpha = 1f - d
-                    if (!hero) {
-                        val s = 1f - (1f - BREATH_MIN) * d
-                        scaleX = s
-                        scaleY = s
-                    }
-                }
+                .graphicsLayer { alpha = 1f - dissolve(mix.progress.value) }
                 .then(imageModifier),
         )
     }
 }
 
-/** How far the dissolve has got: 0 until a quarter of the mix, 1 from three quarters, smooth between. */
-private fun dissolve(p: Float): Float {
-    val x = ((p - 0.25f) / 0.5f).coerceIn(0f, 1f)
+/** The mix's progress with soft ends: the same curve the backdrop's colours follow. */
+internal fun dissolve(p: Float): Float {
+    val x = p.coerceIn(0f, 1f)
     return x * x * (3f - 2f * x)
 }
-
-/** The size the cover recedes to, and the new one settles up from. */
-private const val BREATH_MIN = 0.96f

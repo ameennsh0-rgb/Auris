@@ -1,8 +1,7 @@
 package com.music.bitchord.ui.player
 
-import android.graphics.BitmapShader
+import android.graphics.Bitmap
 import android.graphics.RuntimeShader
-import android.graphics.Shader
 import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.Canvas
@@ -12,35 +11,46 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.asAndroidBitmap
+import kotlinx.coroutines.flow.first
 import kotlin.math.PI
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.sin
 
 /**
- * The player's backdrop as the cover itself, swirled: four copies of it at
- * different sizes, two turning in place and two orbiting, twisted around the
- * centre, with the colours of the next cover flowing into those of this one as
- * an Automix blend progresses.
+ * The player's backdrop in the manner of Apple Music's Automix: soft, glowing
+ * fields of colour taken from the cover, never the cover itself.
  *
- * The covers arrive already blurred (the same tiny bitmaps the lyrics backdrop
- * uses), so one pass of one shader is all it takes: the twist moves smooth
- * colour around, and there is no screen-sized blur to pay for.
+ * Each cover is reduced, once, to a palette of six colours (its average and five
+ * that stand apart from one another). The shader draws a few soft blobs of those
+ * colours, so there is no picture in it to turn, only colour to move.
  *
- * The swirl and its speed swell towards the middle of a blend and settle at its
- * ends, and the animation clock is advanced by that speed rather than scaled by
- * it, so nothing jumps as it changes. Two covers are never positioned
- * differently: only colours move between them, so the frame after a blend ends -
- * with the new cover in both slots - is the frame the blend ended on.
+ * It stands still between mixes. While a mix runs the blobs orbit and the whole
+ * field twists about the centre, with a speed and a twist that swell towards the
+ * middle of the mix and die away to nothing at its ends, and the colours flow
+ * from the palette of the cover being left to that of the next one. A mix ends
+ * with the new cover's palette in both slots, so the frame after it is the frame
+ * it ended on; and a track skipped by hand eases to the new colours over a
+ * moment instead of cutting.
+ *
+ * The covers arrive already tiny and blurred (the same bitmaps the lyrics
+ * backdrop uses) and their palettes are made as soon as they do, which is when
+ * the next song's cover is prefetched, so a mix starts with its colours ready.
+ * There is no texture in the shader at all, so it costs next to nothing.
  */
 @RequiresApi(Build.VERSION_CODES.TIRAMISU)
 @Composable
@@ -64,36 +74,63 @@ internal fun FluidArtBackdrop(
     LaunchedEffect(to) { if (to != null) heldTo = to }
     val bitmapA = from ?: heldFrom ?: to ?: heldTo
     val bitmapB = to ?: heldTo ?: bitmapA
-    val texA = remember(bitmapA) { bitmapA?.let(::bitmapShader) }
-    val texB = remember(bitmapB) { bitmapB?.let(::bitmapShader) }
+    val palA = remember(bitmapA) { bitmapA?.let(::extractPalette) ?: DefaultPalette }
+    val palB = remember(bitmapB) { bitmapB?.let(::extractPalette) ?: DefaultPalette }
 
-    var clock by remember { mutableFloatStateOf(0f) }
+    // What is on screen, kept so that a change of cover can start from it.
+    val shown = remember { FloatArray(PALETTE_FLOATS).also { DefaultPalette.copyInto(it) } }
+    val settle = remember { Settle() }
+    remember(palA) {
+        settle.from = shown.copyOf()
+        settle.seconds = 0f
+        0
+    }
+
     val progressNow by rememberUpdatedState(progress)
-    LaunchedEffect(animate) {
-        if (!animate) return@LaunchedEffect
-        var last = androidx.compose.runtime.withFrameNanos { it }
+    var phase by remember { mutableFloatStateOf(0f) }
+    var tick by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(animate, palA) {
+        if (!animate) {
+            settle.seconds = SETTLE_SECONDS
+            tick++
+            return@LaunchedEffect
+        }
         while (true) {
-            val now = androidx.compose.runtime.withFrameNanos { it }
-            val dt = ((now - last) / 1_000_000_000f).coerceIn(0f, 0.1f)
-            last = now
-            val speed = 1f + 1.6f * sin(PI.toFloat() * progressNow().coerceIn(0f, 1f))
-            clock += dt * speed
+            var last = withFrameNanos { it }
+            while (true) {
+                val now = withFrameNanos { it }
+                val dt = ((now - last) / 1_000_000_000f).coerceIn(0f, 0.1f)
+                last = now
+                val p = progressNow().coerceIn(0f, 1f)
+                phase += dt * PHASE_SPEED * sin(PI.toFloat() * p)
+                settle.seconds += dt
+                tick = now
+                val mixing = p > 0f && p < 1f
+                if (!mixing && settle.seconds >= SETTLE_SECONDS) break
+            }
+            // Nothing is moving: ask for no more frames until a mix starts.
+            snapshotFlow { progressNow().let { it > 0f && it < 1f } }.first { it }
         }
     }
 
     Box(modifier.fillMaxSize().background(Backdrop)) {
         Canvas(Modifier.fillMaxSize()) {
-            val a = texA
-            val b = texB
-            if (shader != null && a != null && b != null && bitmapA != null && bitmapB != null) {
-                shader.setInputShader("texA", a)
-                shader.setInputShader("texB", b)
+            tick // redraw with the frame clock
+            if (shader != null) {
+                val p = progressNow().coerceIn(0f, 1f)
+                val s = p * p * (3f - 2f * p)
+                val k = (settle.seconds / SETTLE_SECONDS).coerceIn(0f, 1f).let { it * it * (3f - 2f * it) }
+                val before = settle.from
+                for (i in 0 until PALETTE_FLOATS) {
+                    val target = palA[i] + (palB[i] - palA[i]) * s
+                    shown[i] = if (before != null && k < 1f) before[i] + (target - before[i]) * k else target
+                }
                 shader.setFloatUniform("res", size.width, size.height)
-                shader.setFloatUniform("sizeA", bitmapA.width.toFloat(), bitmapA.height.toFloat())
-                shader.setFloatUniform("sizeB", bitmapB.width.toFloat(), bitmapB.height.toFloat())
-                shader.setFloatUniform("uT", progressNow().coerceIn(0f, 1f))
-                shader.setFloatUniform("uClock", clock)
-                shader.setFloatUniform("uSwirl", 1f)
+                shader.setFloatUniform("uPhase", phase)
+                shader.setFloatUniform("uSurge", sin(PI.toFloat() * p))
+                for (c in 0 until PALETTE_SIZE) {
+                    shader.setFloatUniform("c$c", shown[c * 3], shown[c * 3 + 1], shown[c * 3 + 2])
+                }
                 drawRect(ShaderBrush(shader))
             }
             if (scrim) {
@@ -112,21 +149,95 @@ internal fun FluidArtBackdrop(
 
 private val Backdrop = Color(0xFF121212)
 
-@RequiresApi(Build.VERSION_CODES.TIRAMISU)
-private fun bitmapShader(image: ImageBitmap): BitmapShader =
-    BitmapShader(image.asAndroidBitmap(), Shader.TileMode.MIRROR, Shader.TileMode.MIRROR).apply {
-        setFilterMode(BitmapShader.FILTER_MODE_LINEAR)
+/** Radians per second of the blobs' orbit, at the peak of a mix. */
+private const val PHASE_SPEED = 1.3f
+
+/** How long a change of cover outside a mix takes to ease across. */
+private const val SETTLE_SECONDS = 0.8f
+
+private class Settle {
+    var from: FloatArray? = null
+    var seconds: Float = SETTLE_SECONDS
+}
+
+private const val PALETTE_SIZE = 6
+private const val PALETTE_FLOATS = PALETTE_SIZE * 3
+
+/** What the backdrop shows before any cover has arrived. */
+private val DefaultPalette = FloatArray(PALETTE_FLOATS) { 0.16f }
+
+/**
+ * Six colours of a cover, as r, g, b floats in 0..1: its average first, then
+ * five that stand apart from one another (favouring the ones with colour in
+ * them), ordered dark to light so two covers' palettes line up by brightness
+ * when one flows into the other.
+ */
+private fun extractPalette(image: ImageBitmap): FloatArray = runCatching {
+    val source = image.asAndroidBitmap()
+    val soft = if (source.config == Bitmap.Config.HARDWARE) {
+        source.copy(Bitmap.Config.ARGB_8888, false)
+    } else {
+        source
     }
+    val grid = 8
+    val small = Bitmap.createScaledBitmap(soft, grid, grid, true)
+    val px = IntArray(grid * grid)
+    small.getPixels(px, 0, grid, 0, 0, grid, grid)
+    val n = px.size
+    val r = FloatArray(n) { ((px[it] shr 16) and 0xFF) / 255f }
+    val g = FloatArray(n) { ((px[it] shr 8) and 0xFF) / 255f }
+    val b = FloatArray(n) { (px[it] and 0xFF) / 255f }
+    val chroma = FloatArray(n) { max(r[it], max(g[it], b[it])) - min(r[it], min(g[it], b[it])) }
+
+    val avg = floatArrayOf(r.average().toFloat(), g.average().toFloat(), b.average().toFloat())
+
+    // Farthest-point picks, weighted towards colourful cells.
+    val chosen = ArrayList<Int>()
+    chosen += (0 until n).maxByOrNull { chroma[it] } ?: 0
+    while (chosen.size < PALETTE_SIZE - 1) {
+        var best = -1
+        var bestScore = -1f
+        for (i in 0 until n) {
+            if (i in chosen) continue
+            var nearest = Float.MAX_VALUE
+            for (j in chosen) {
+                val dr = r[i] - r[j]
+                val dg = g[i] - g[j]
+                val db = b[i] - b[j]
+                nearest = min(nearest, dr * dr + dg * dg + db * db)
+            }
+            val score = nearest * (0.35f + chroma[i])
+            if (score > bestScore) {
+                bestScore = score
+                best = i
+            }
+        }
+        chosen += if (best >= 0) best else 0
+    }
+    val colours = ArrayList<FloatArray>()
+    for (i in chosen) colours += floatArrayOf(r[i], g[i], b[i])
+    colours.sortBy { 0.299f * it[0] + 0.587f * it[1] + 0.114f * it[2] }
+
+    val out = FloatArray(PALETTE_FLOATS)
+    out[0] = avg[0]; out[1] = avg[1]; out[2] = avg[2]
+    for ((k, c) in colours.withIndex()) {
+        out[(k + 1) * 3] = c[0]
+        out[(k + 1) * 3 + 1] = c[1]
+        out[(k + 1) * 3 + 2] = c[2]
+    }
+    out
+}.getOrDefault(DefaultPalette)
 
 private const val FLUID_AGSL = """
-uniform shader texA;
-uniform shader texB;
 uniform float2 res;
-uniform float2 sizeA;
-uniform float2 sizeB;
-uniform float uT;
-uniform float uClock;
-uniform float uSwirl;
+uniform float uPhase;
+uniform float uSurge;
+uniform float3 c0;
+uniform float3 c1;
+uniform float3 c2;
+uniform float3 c3;
+uniform float3 c4;
+uniform float3 c5;
 
 float2 rot2(float2 v, float a) {
     float c = cos(a);
@@ -134,54 +245,37 @@ float2 rot2(float2 v, float a) {
     return float2(c * v.x - s * v.y, s * v.x + c * v.y);
 }
 
-// (u, v, weight) of one square layer. Its edges are soft, so the stack has no seams.
-float3 layerQ(float2 p, float scale, float ang, float2 off) {
-    float2 q = rot2(p - off, ang) / scale + 0.5;
-    float2 e = smoothstep(float2(0.0), float2(0.22), q) * smoothstep(float2(0.0), float2(0.22), 1.0 - q);
-    return float3(q, e.x * e.y);
+float blobW(float2 s, float2 home, float2 w, float o) {
+    float2 c = home + 0.20 * float2(cos(uPhase * w.x + o), sin(uPhase * w.y + o * 1.7));
+    float2 d = (s - c) * float2(1.0, 0.62);
+    return exp(-dot(d, d) / 0.085);
 }
 
 half4 main(float2 fc) {
     float2 uv = fc / res;
-    float aspect = res.x / res.y;
-    float2 p = (uv - 0.5) * float2(1.0, 1.0 / aspect);
-    float R = length(float2(0.5, 0.5 / aspect));
+    float2 s = uv - 0.5;
 
-    // The swirl swells towards the middle of a blend.
-    float peak = sin(3.14159265 * uT);
-    float falloff = 1.0 - clamp(length(p) / R, 0.0, 1.0);
-    float theta = uSwirl * (1.0 + 1.5 * peak) * falloff * falloff;
-    float2 q = rot2(p, theta);
+    // The whole field twists about the middle while a mix runs.
+    float fall = 1.0 - clamp(length(s) * 1.6, 0.0, 1.0);
+    s = rot2(s, uSurge * 2.0 * fall * fall);
 
-    float t = uClock;
-    float base = max(1.25, 1.35 / aspect);
-    float2 q0 = rot2(q, 0.05 * t) / base + 0.5;
-    float3 l1 = layerQ(q, 0.80, -0.14 * t, float2(0.0));
-    float a3 = 0.38 * t;
-    float3 l2 = layerQ(q, 0.50, 0.32 * t, 0.20 * float2(cos(a3), sin(a3)));
-    float a4 = -0.62 * t + 2.1;
-    float3 l3 = layerQ(q, 0.25, -0.55 * t, 0.30 * float2(cos(a4), sin(a4 * 1.2)));
+    float w1 = blobW(s, float2(-0.24, -0.30), float2(0.9, 1.1), 0.0);
+    float w2 = blobW(s, float2(0.26, -0.18), float2(1.2, 0.8), 1.3);
+    float w3 = blobW(s, float2(-0.20, 0.10), float2(1.0, 1.4), 2.6);
+    float w4 = blobW(s, float2(0.24, 0.28), float2(0.8, 1.2), 3.9);
+    float w5 = blobW(s, float2(0.02, 0.44), float2(1.4, 0.9), 5.2);
 
-    float3 ca = float3(texA.eval(q0 * sizeA).rgb);
-    ca = mix(ca, float3(texA.eval(l1.xy * sizeA).rgb), l1.z);
-    ca = mix(ca, float3(texA.eval(l2.xy * sizeA).rgb), l2.z);
-    ca = mix(ca, float3(texA.eval(l3.xy * sizeA).rgb), l3.z);
-
-    float3 cb = float3(texB.eval(q0 * sizeB).rgb);
-    cb = mix(cb, float3(texB.eval(l1.xy * sizeB).rgb), l1.z);
-    cb = mix(cb, float3(texB.eval(l2.xy * sizeB).rgb), l2.z);
-    cb = mix(cb, float3(texB.eval(l3.xy * sizeB).rgb), l3.z);
-
-    float s = smoothstep(0.0, 1.0, uT);
-    float3 c = mix(ca, cb, s);
+    float base = 0.30;
+    float3 c = (c0 * base + c1 * w1 + c2 * w2 + c3 * w3 + c4 * w4 + c5 * w5) /
+        (base + w1 + w2 + w3 + w4 + w5);
 
     float lum = dot(c, float3(0.299, 0.587, 0.114));
-    c = mix(float3(lum), c, 1.5);
-    c *= 0.88;
+    c = mix(float3(lum), c, 1.45);
+    c *= 0.86;
     float v = 1.0 - smoothstep(0.25, 1.05, length(uv - 0.5) * 1.25);
-    c *= mix(0.74, 1.0, v);
+    c *= mix(0.78, 1.0, v);
     float n = fract(sin(dot(fc, float2(12.9898, 78.233))) * 43758.5453);
     c += (n - 0.5) / 200.0;
-    return half4(half3(c), 1.0);
+    return half4(half3(clamp(c, 0.0, 1.0)), 1.0);
 }
 """
