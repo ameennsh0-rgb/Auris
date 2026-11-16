@@ -348,7 +348,7 @@ float vnoise(float2 p) {
 float fbm(float2 p) {
     float a = 0.5;
     float t = 0.0;
-    for (int k = 0; k < 4; k++) {
+    for (int k = 0; k < 2; k++) {
         t += a * vnoise(p);
         p = p * 2.03 + float2(17.0, 9.0);
         a *= 0.5;
@@ -359,6 +359,7 @@ float fbm(float2 p) {
 // One patch of fog: a stretched, turned shape whose edge is pushed and pulled by
 // slowly moving noise, with a wide soft rim, so it is never a circle.
 float fogM(float2 uv, float2 asp, float4 sp, float4 sh) {
+    if (sp.z <= 0.001) return 0.0;
     float2 q = (uv - sp.xy) * asp;
     float ca = cos(sh.z);
     float sa = sin(sh.z);

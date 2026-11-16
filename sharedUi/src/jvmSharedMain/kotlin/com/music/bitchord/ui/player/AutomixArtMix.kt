@@ -81,7 +81,10 @@ internal fun Modifier.automixHidden(mix: AutomixArtMix): Modifier = graphicsLaye
 private const val FALLBACK_DURATION_MS = 6000
 
 /** How quickly a blend that ends early is wound up, so the sleeve isn't left half-mixed. */
-private const val WIND_UP_MS = 350
+private const val WIND_UP_MS = 900
+
+/** The share of the blend's length the picture takes to finish in. */
+private const val FINISH_AHEAD = 0.8f
 
 private val ArtMixEasing = CubicBezierEasing(0.4f, 0f, 0.2f, 1f)
 private val SleeveCorners = RoundedCornerShape(8.dp)
@@ -119,7 +122,11 @@ internal fun rememberAutomixArtMix(
             val fromUrl = from.url
             val toUrl = to.url
             if (reduceNow || fromUrl == null || toUrl == null || fromUrl == toUrl) return@LaunchedEffect
-            val durationMs = (blendNow?.fadeMs ?: 0L).takeIf { it > 0L }?.toInt() ?: FALLBACK_DURATION_MS
+            // Finished a little ahead of the engine: the player is released on the
+            // main thread when the mix ends and the screen can stand still for a
+            // moment then, so the picture should already be at rest.
+            val durationMs = (blendNow?.fadeMs ?: 0L).takeIf { it > 0L }
+                ?.let { (it * FINISH_AHEAD).toInt() } ?: FALLBACK_DURATION_MS
             mix.outgoing = from.request
             mix.incoming = to.request
             mix.outgoingRemote = artRemoteNow
