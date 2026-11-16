@@ -4,6 +4,7 @@ import android.content.Context
 import android.database.ContentObserver
 import android.media.AudioFormat
 import android.media.AudioManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
@@ -11,6 +12,7 @@ import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.music.bitchord.data.canvas.CanvasArtwork
 import com.music.bitchord.data.canvas.CanvasRepository
@@ -87,6 +89,23 @@ class AndroidPlayerHost(context: Context) : PlayerHost {
 
     @Composable
     override fun CanvasVideo(spec: CanvasVideoSpec, modifier: Modifier) = AndroidCanvasVideo(spec, modifier)
+
+    // AGSL, so Android 13 and up; anything older keeps the player's own backdrop.
+    override val supportsFluidBackdrop: Boolean get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+
+    @Composable
+    override fun FluidBackdrop(
+        from: ImageBitmap?,
+        to: ImageBitmap?,
+        progress: () -> Float,
+        animate: Boolean,
+        scrim: Boolean,
+        modifier: Modifier,
+    ) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            FluidArtBackdrop(from, to, progress, animate, scrim, modifier)
+        }
+    }
 
     @Composable
     override fun rememberRemoteArtworkUrl(song: Song?): String? =

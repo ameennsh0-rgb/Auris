@@ -41,6 +41,28 @@ interface PlayerHost {
     @Composable
     fun CanvasVideo(spec: CanvasVideoSpec, modifier: Modifier)
 
+    /** Whether [FluidBackdrop] can be drawn here; a platform that can't leaves the player's own backdrop. */
+    val supportsFluidBackdrop: Boolean get() = false
+
+    /**
+     * The player's backdrop as a slow swirl of the cover, for platforms with a
+     * shader to do it with. [from] and [to] are the covers on either side of an
+     * Automix blend, pre-blurred; they are the same picture when none is
+     * running. [progress] is how far the blend has got (0 to 1) and is read as
+     * the frame is drawn; [animate] false holds the swirl still. Only drawn
+     * where [supportsFluidBackdrop] is true.
+     */
+    @Composable
+    fun FluidBackdrop(
+        from: ImageBitmap?,
+        to: ImageBitmap?,
+        progress: () -> Float,
+        animate: Boolean,
+        scrim: Boolean,
+        modifier: Modifier,
+    ) {
+    }
+
     /**
      * Artwork for [song], resolving covers that live inside a remote file
      * (WebDAV, SMB) where the platform can. Returns [Song.thumbnailUrl] otherwise.

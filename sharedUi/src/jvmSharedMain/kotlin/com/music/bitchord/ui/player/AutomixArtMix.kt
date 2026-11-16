@@ -61,6 +61,12 @@ internal class AutomixArtMix {
     var incoming: ImageRequest? by mutableStateOf(null)
         internal set
 
+    /** The remote artwork behind [outgoing] and [incoming], so other layers can load the same two covers. */
+    var outgoingRemote: String? by mutableStateOf(null)
+        internal set
+    var incomingRemote: String? by mutableStateOf(null)
+        internal set
+
     /** 0 as the blend of covers begins, 1 as it ends. */
     val progress = Animatable(0f)
 
@@ -92,6 +98,8 @@ private val SleeveCorners = RoundedCornerShape(8.dp)
 internal fun rememberAutomixArtMix(
     art: PlayerArtwork,
     next: PlayerArtwork,
+    artRemote: String?,
+    nextRemote: String?,
     mixing: Boolean,
     blend: MixBlend?,
 ): AutomixArtMix {
@@ -101,6 +109,8 @@ internal fun rememberAutomixArtMix(
     val nextNow by rememberUpdatedState(next)
     val blendNow by rememberUpdatedState(blend)
     val reduceNow by rememberUpdatedState(reduceAnimation)
+    val artRemoteNow by rememberUpdatedState(artRemote)
+    val nextRemoteNow by rememberUpdatedState(nextRemote)
 
     // Held in the image cache ahead of the blend. The painter itself is never
     // drawn; asking for it is what starts the load.
@@ -116,6 +126,8 @@ internal fun rememberAutomixArtMix(
             val durationMs = (blendNow?.fadeMs ?: 0L).takeIf { it > 0L }?.toInt() ?: FALLBACK_DURATION_MS
             mix.outgoing = from.request
             mix.incoming = to.request
+            mix.outgoingRemote = artRemoteNow
+            mix.incomingRemote = nextRemoteNow
             mix.progress.snapTo(0f)
             mix.progress.animateTo(1f, tween(durationMs, easing = ArtMixEasing))
         } else if (mix.active) {
@@ -124,6 +136,8 @@ internal fun rememberAutomixArtMix(
             mix.progress.animateTo(1f, tween(WIND_UP_MS))
             mix.outgoing = null
             mix.incoming = null
+            mix.outgoingRemote = null
+            mix.incomingRemote = null
         }
     }
     return mix

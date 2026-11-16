@@ -1347,8 +1347,9 @@ fun NowPlayingScreen(
     // banner keeps the ordinary fade.
     val mixBlend by PlayerSettings.smartMixBlend.collectAsStateWithLifecycle()
     // The cover of the song the blend is heading for, loaded before it is needed.
-    val nextArt = rememberPlayerArtwork(rememberRemoteArtworkUrl(queue.getOrNull(queueIndex + 1)))
-    val automixArt = rememberAutomixArtMix(art, nextArt, mixing, mixBlend)
+    val nextRemoteArt = rememberRemoteArtworkUrl(queue.getOrNull(queueIndex + 1))
+    val nextArt = rememberPlayerArtwork(nextRemoteArt)
+    val automixArt = rememberAutomixArtMix(art, nextArt, remoteArt, nextRemoteArt, mixing, mixBlend)
     // Sticky, unlike [PlayerArtwork.loaded]: the banner is the shape of the player rather
     // than a property of the track in it. Waiting on each new cover would
     // collapse the banner into a card and blow it back out on every skip —
@@ -1718,6 +1719,22 @@ fun NowPlayingScreen(
     // between the portrait and landscape players; only the cached bitmap
     // changes when the artwork preparation above completes for another song.
     val currentFullArtworkBlurImage = rememberUpdatedState(fullArtworkBlurImage)
+    // The fluid backdrop (see [PlayerHost.FluidBackdrop]) stands in for the
+    // mesh and the tablet's blur wherever the sleeve is a card on the page. It
+    // keeps out of the full-bleed banner, whose mesh is built to carry on from
+    // the banner's own bottom edge, and out of a clip drawn as the backdrop.
+    val reduceAnimationNow by PlayerSettings.reduceAnimation.collectAsStateWithLifecycle()
+    val fluidSupported = PlayerPlatform.host.supportsFluidBackdrop
+    val fluidBackdrop = fluidSupported && !heroMode && !canvasFirstPortrait && !spotifyCanvasPresentation
+    // The covers either side of a blend while one runs, the one on screen
+    // otherwise, each as the same tiny pre-blurred bitmap the lyrics backdrop
+    // uses. The next song's is made ahead, so a blend starts on a cover that is
+    // already there.
+    val fluidFromUrl = if (automixArt.active) automixArt.outgoingRemote else remoteArt
+    val fluidToUrl = if (automixArt.active) automixArt.incomingRemote else remoteArt
+    val fluidFrom = rememberFullArtworkBlurImage(fluidFromUrl, ART_PX, prepare = fluidBackdrop)
+    val fluidTo = rememberFullArtworkBlurImage(fluidToUrl, ART_PX, prepare = fluidBackdrop)
+    rememberFullArtworkBlurImage(nextRemoteArt, ART_PX, prepare = fluidBackdrop && !reduceAnimationNow)
     val fullArtworkBlurContent = remember {
         movableContentOf<Modifier> { backdropModifier ->
             FullArtworkBlurBackdrop(
@@ -2188,7 +2205,16 @@ fun NowPlayingScreen(
             animationSpec = tween(durationMillis = 360, easing = FastOutSlowInEasing),
             label = "fullArtworkBackdropCrossfade",
         )
-        if (legacyMeshBackdrop) {
+        if (fluidBackdrop) {
+            PlayerPlatform.host.FluidBackdrop(
+                from = fluidFrom,
+                to = fluidTo,
+                progress = { if (automixArt.active) automixArt.progress.value else 0f },
+                animate = isPlaying && !reduceAnimationNow,
+                scrim = tabletArtworkBackdrop,
+                modifier = Modifier,
+            )
+        } else if (legacyMeshBackdrop) {
             // v1.5's backdrop, restored verbatim: no seam, because the blobs
             // are not anchored to anything on screen — they fill the player and
             // the artwork simply sits on top of them. Keyed on the track, so
@@ -2209,7 +2235,9 @@ fun NowPlayingScreen(
             )
         }
         fullArtworkBlurContent(
-            Modifier.graphicsLayer { alpha = fullArtworkBackdropAlpha },
+            // On a tablet the fluid backdrop is the whole backdrop; on a phone
+            // the lyrics and queue still crossfade the blurred cover over it.
+            Modifier.graphicsLayer { alpha = if (fluidBackdrop && tabletArtworkBackdrop) 0f else fullArtworkBackdropAlpha },
         )
 
         // The wash the controls stand on, from the art's bottom edge down.
