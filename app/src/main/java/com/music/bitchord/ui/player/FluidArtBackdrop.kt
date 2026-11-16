@@ -28,6 +28,8 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import kotlinx.coroutines.flow.first
 import kotlin.math.PI
 import kotlin.math.max
+import kotlin.math.pow
+import kotlin.random.Random
 import kotlin.math.min
 import kotlin.math.sin
 
@@ -80,6 +82,7 @@ internal fun FluidArtBackdrop(
     // What is on screen, kept so that a change of cover can start from it.
     val shown = remember { FloatArray(PALETTE_FLOATS).also { DefaultPalette.copyInto(it) } }
     val settle = remember { Settle() }
+    val fog = remember { Fog() }
     remember(palA) {
         settle.from = shown.copyOf()
         settle.seconds = 0f
@@ -177,6 +180,54 @@ private class Settle {
     var from: FloatArray? = null
     var seconds: Float = SETTLE_SECONDS
 }
+
+private const val FOG_SPOTS = 3
+
+/**
+ * The patches of fog a mix spreads from: three, in the background and away from
+ * the cover, each stretched and turned its own way and starting at its own
+ * moment. Rolled afresh for every mix.
+ */
+private class Fog {
+    var live = false
+    val x = FloatArray(FOG_SPOTS)
+    val y = FloatArray(FOG_SPOTS)
+    val delay = FloatArray(FOG_SPOTS)
+    val grow = FloatArray(FOG_SPOTS)
+    val sx = FloatArray(FOG_SPOTS)
+    val sy = FloatArray(FOG_SPOTS)
+    val angle = FloatArray(FOG_SPOTS)
+    val seed = FloatArray(FOG_SPOTS)
+
+    fun roll() {
+        val pool = ZONES.toMutableList()
+        for (i in 0 until FOG_SPOTS) {
+            val z = pool.removeAt(Random.nextInt(pool.size))
+            x[i] = z[0] + (Random.nextFloat() - 0.5f) * 0.12f
+            y[i] = z[1] + (Random.nextFloat() - 0.5f) * 0.08f
+            delay[i] = Random.nextFloat() * 0.15f
+            grow[i] = 0.95f + Random.nextFloat() * 0.25f
+            sx[i] = 0.6f + Random.nextFloat()
+            sy[i] = 0.6f + Random.nextFloat()
+            angle[i] = Random.nextFloat() * 6.28f
+            seed[i] = Random.nextFloat()
+        }
+    }
+
+    /** How far spot [i] has grown at mix progress [p], in widths of the screen: slow to start, then quicker. */
+    fun radius(i: Int, p: Float): Float {
+        val u = ((p - delay[i]) / 0.85f).coerceIn(0f, 1f)
+        val eased = u * u * (3f - 2f * u)
+        return 2.8f * grow[i] * eased.pow(1.7f)
+    }
+}
+
+/** Where fog may start: the corners, sides and foot of the screen, none of them on the cover. */
+private val ZONES = listOf(
+    floatArrayOf(0.18f, 0.74f), floatArrayOf(0.82f, 0.78f), floatArrayOf(0.05f, 0.55f),
+    floatArrayOf(0.95f, 0.50f), floatArrayOf(0.50f, 0.92f), floatArrayOf(0.08f, 0.05f),
+    floatArrayOf(0.92f, 0.06f),
+)
 
 private const val PALETTE_SIZE = 6
 private const val PALETTE_FLOATS = PALETTE_SIZE * 3
