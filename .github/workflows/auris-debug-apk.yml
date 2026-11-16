@@ -8,6 +8,9 @@ on:
     branches: [volume-automix]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 concurrency:
   group: auris-debug-${{ github.ref }}
   cancel-in-progress: true
@@ -37,3 +40,16 @@ jobs:
           name: auris-dev-debug-apk
           path: app/build/outputs/apk/dev/debug/*.apk
           if-no-files-found: error
+
+      - name: Publish the APK to a prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          apk=$(ls app/build/outputs/apk/dev/debug/*.apk | head -1)
+          cp "$apk" auris-dev-debug.apk
+          gh release delete auris-volume-automix --yes --cleanup-tag || true
+          gh release create auris-volume-automix auris-dev-debug.apk \
+            --prerelease \
+            --target "${{ github.sha }}" \
+            --title "Auris dev debug build (volume-automix)" \
+            --notes "Debug-signed dev flavour with the output level slider and the Automix cover-art handoff."
