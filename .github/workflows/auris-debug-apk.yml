@@ -31,6 +31,14 @@ jobs:
 
       - run: chmod +x gradlew
 
+      # A package of its own, so this installs next to the Auris already on the
+      # phone instead of failing against its signature and version code (or,
+      # worse, replacing it and its library).
+      - name: Use a separate package name
+        run: |
+          sed -i 's/applicationId = "com.dev.bitchord"/applicationId = "com.dev.bitchord.next"/' app/build.gradle.kts
+          sed -i 's/"app_name", "BitChord Next"/"app_name", "Auris Next"/' app/build.gradle.kts
+          grep -n 'com.dev.bitchord.next\|Auris Next' app/build.gradle.kts
       - name: Build dev debug APK
         run: ./gradlew assembleDevDebug --stacktrace
 
