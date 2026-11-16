@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.music.bitchord.data.settings.AppSettings
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -94,6 +96,7 @@ internal fun FluidArtBackdrop(
         0
     }
 
+    val backdropStyle by AppSettings.automixBackdrop.collectAsStateWithLifecycle()
     val progressNow by rememberUpdatedState(progress)
     var phase by remember { mutableFloatStateOf(0f) }
     var tick by remember { mutableLongStateOf(0L) }
@@ -165,6 +168,7 @@ internal fun FluidArtBackdrop(
                 shader.setFloatUniform("uPhase", phase)
                 shader.setFloatUniform("uSurge", mixFlow(p))
                 shader.setFloatUniform("uP", p)
+                shader.setFloatUniform("uStyle", backdropStyle.toFloat())
                 for (c in 0 until PALETTE_SIZE) {
                     shader.setFloatUniform("c$c", shown[c * 3], shown[c * 3 + 1], shown[c * 3 + 2])
                     // What the fog reveals; at rest it is the same field.
@@ -172,7 +176,7 @@ internal fun FluidArtBackdrop(
                     shader.setFloatUniform("b$c", src[c * 3], src[c * 3 + 1], src[c * 3 + 2])
                 }
                 for (i in 0 until FOG_SPOTS) {
-                    shader.setFloatUniform("sp$i", fog.x[i], fog.y[i], fog.radius(i, p), fog.seed[i])
+                    shader.setFloatUniform("sp$i", fog.x[i], fog.y[i], fog.radius(i, p, backdropStyle == 1), fog.seed[i])
                     shader.setFloatUniform("sh$i", fog.sx[i], fog.sy[i], fog.angle[i], 0f)
                 }
                 drawRect(ShaderBrush(shader))
@@ -248,10 +252,11 @@ private class Fog {
     }
 
     /** How far spot [i] has grown at mix progress [p], in widths of the screen: at a constant pace. */
-    fun radius(i: Int, p: Float): Float {
+    fun radius(i: Int, p: Float, ink: Boolean): Float {
         // At a constant pace, reaching the whole screen at nine tenths of the mix.
         val u = ((p - delay[i]) / (0.9f - delay[i])).coerceIn(0f, 1f)
-        return 2.9f * grow[i] * u
+        // Ink creeps (slow start, then steadier); fog goes at one pace throughout.
+        return 2.9f * grow[i] * (if (ink) u.pow(1.45f) else u)
     }
 }
 
@@ -335,6 +340,7 @@ uniform float2 res;
 uniform float uPhase;
 uniform float uSurge;
 uniform float uP;
+uniform float uStyle;
 uniform float3 c0;
 uniform float3 c1;
 uniform float3 c2;
@@ -403,7 +409,25 @@ float fogM(float2 uv, float2 asp, float4 sp, float4 sh) {
     return (1.0 - smoothstep(sp.z - 0.42, sp.z, dd)) * born;
 }
 
+// Ink in water: lobes and fine tendrils on the edge, a crisp rim, and a darker
+// pool of ink just inside it. (mask, rim)
+float2 inkM(float2 uv, float2 asp, float4 sp, float4 sh) {
+    if (sp.z <= 0.001) return float2(0.0, 0.0);
+    float2 q = (uv - sp.xy) * asp;
+    float ca = cos(sh.z);
+    float sa = sin(sh.z);
+    q = float2(ca * q.x + sa * q.y, -sa * q.x + ca * q.y) * sh.xy;
+    float n1 = fbm(uv * asp * 3.0 + sp.w * 7.0 + uP * 0.6) - 0.5;
+    float n2 = fbm(uv * asp * 9.0 + sp.w * 13.0 - uP * 1.1) - 0.5;
+    float di = length(q) + n1 * 0.75 + n2 * 0.30;
+    float mi = 1.0 - smoothstep(sp.z - 0.05, sp.z, di);
+    float born = smoothstep(0.0, 0.25, sp.z);
+    float rim = smoothstep(sp.z - 0.17, sp.z - 0.03, di) * mi;
+    return float2(mi * born, rim * born);
+}
+
 half4 main(float2 fc) {
+
     float2 uv = fc / res;
     float2 s = uv - 0.5;
     float2 asp = float2(1.0, res.y / res.x);
@@ -423,9 +447,22 @@ half4 main(float2 fc) {
     float3 cA = (c0 * base + c1 * w1 + c2 * w2 + c3 * w3 + c4 * w4 + c5 * w5) / den;
     float3 cB = (b0 * base + b1 * w1 + b2 * w2 + b3 * w3 + b4 * w4 + b5 * w5) / den;
 
-    float m = max(fogM(uv, asp, sp0, sh0), max(fogM(uv, asp, sp1, sh1), fogM(uv, asp, sp2, sh2)));
+    float m = 0.0;
+    float rim = 0.0;
+    if (uStyle < 0.5) {
+        m = max(fogM(uv, asp, sp0, sh0), max(fogM(uv, asp, sp1, sh1), fogM(uv, asp, sp2, sh2)));
+    } else if (uStyle < 1.5) {
+        float2 a = inkM(uv, asp, sp0, sh0);
+        float2 b = inkM(uv, asp, sp1, sh1);
+        float2 d = inkM(uv, asp, sp2, sh2);
+        m = max(a.x, max(b.x, d.x));
+        rim = max(a.y, max(b.y, d.y));
+    } else {
+        m = smoothstep(0.0, 1.0, uP);
+    }
     m = max(m, smoothstep(0.93, 1.0, uP));
     float3 c = mix(cA, cB, m);
+    c = mix(c, c * c * 1.2, rim * 0.35 * (1.0 - smoothstep(0.85, 1.0, uP)));
 
     float lum = dot(c, float3(0.299, 0.587, 0.114));
     c = mix(float3(lum), c, 1.45);

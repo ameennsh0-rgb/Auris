@@ -206,6 +206,7 @@ fun SettingsScreen(
     val spatialAudio by AppSettings.spatialAudio.collectAsStateWithLifecycle()
     val nerdStats by AppSettings.showNerdStats.collectAsStateWithLifecycle()
     val reduceAnimation by AppSettings.reduceAnimation.collectAsStateWithLifecycle()
+        val automixBackdrop by AppSettings.automixBackdrop.collectAsStateWithLifecycle()
     val reduceDynamicBlur by AppSettings.reduceDynamicBlur.collectAsStateWithLifecycle()
     val liquidGlass by AppSettings.liquidGlass.collectAsStateWithLifecycle()
     val liquidGlassIntensity by AppSettings.liquidGlassIntensity.collectAsStateWithLifecycle()
@@ -746,6 +747,23 @@ fun SettingsScreen(
                     subtitle = stringResource(R.string.automix_performance_subtitle),
                     value = automixPerformance.localizedLabel(),
                     onClick = { pickingAutomixPerformance = true },
+                )
+            }
+            row("Automix backdrop", "fog", "ink", "animation", "swirl", "transition") {
+                SettingsRow(
+                    icon = Icons.Rounded.AutoAwesome,
+                    title = "Automix backdrop",
+                    subtitle = when (automixBackdrop) {
+                        0 -> "Soft fog spreads in the cover's colours while a mix runs."
+                        1 -> "Ink spreads with crisp, feathered edges while a mix runs."
+                        else -> "Colours simply fade into the next cover's."
+                    },
+                    value = when (automixBackdrop) {
+                        0 -> "Fog"
+                        1 -> "Ink"
+                        else -> "Fade"
+                    },
+                    onClick = { AppSettings.setAutomixBackdrop((automixBackdrop + 1) % 3) },
                 )
             }
             val skipSilenceTitle = stringResource(R.string.skip_silence)
