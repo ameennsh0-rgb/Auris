@@ -39,6 +39,12 @@ jobs:
           sed -i 's/applicationId = "com.dev.bitchord"/applicationId = "com.dev.bitchord.next"/' app/build.gradle.kts
           sed -i 's/"app_name", "BitChord Next"/"app_name", "Auris Next"/' app/build.gradle.kts
           grep -n 'com.dev.bitchord.next\|Auris Next' app/build.gradle.kts
+      # One fixed debug key for every build, so a new APK installs over the
+      # previous one instead of being rejected for a signature mismatch.
+      - name: Use the fixed debug keystore
+        run: |
+          mkdir -p ~/.android
+          base64 -d .github/auris-debug.keystore.b64 > ~/.android/debug.keystore
       - name: Build dev debug APK
         run: ./gradlew assembleDevDebug --stacktrace
 
