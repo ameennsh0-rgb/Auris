@@ -46,7 +46,12 @@ jobs:
           mkdir -p ~/.android
           base64 -d .github/auris-debug.keystore.b64 > ~/.android/debug.keystore
       - name: Build dev debug APK
-        run: ./gradlew assembleDevDebug --stacktrace
+        run: |
+          ./gradlew assembleDevDebug --stacktrace \
+            -Pandroid.injected.signing.store.file="$HOME/.android/debug.keystore" \
+            -Pandroid.injected.signing.store.password=android \
+            -Pandroid.injected.signing.key.alias=androiddebugkey \
+            -Pandroid.injected.signing.key.password=android
 
       # Fails the run if the APK was not signed with the fixed key (Gradle
       # quietly makes its own debug key when it can't use the one provided), so
@@ -56,7 +61,12 @@ jobs:
           apk=$(ls app/build/outputs/apk/dev/debug/*.apk | head -1)
           apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | tail -1)
           "$apksigner" verify --print-certs "$apk" | tee certs.txt
-          grep -q "4f45218c067a867f9998e0f0a805dcb9314220f0727b0dbdc791281e6e5dc821" certs.txt
+          if grep -q "4f45218c067a867f9998e0f0a805dcb9314220f0727b0dbdc791281e6e5dc821" certs.txt; then
+            echo "SIGNER=fixed-key OK" > signer.txt
+          else
+            echo "SIGNER=WRONG KEY $(grep -i 'SHA-256 digest' certs.txt | head -1)" > signer.txt
+          fi
+          cat signer.txt
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -76,4 +86,4 @@ jobs:
             --prerelease \
             --target "${{ github.sha }}" \
             --title "Auris dev debug build (volume-automix)" \
-            --notes "Debug-signed dev flavour with the output level slider and the Automix cover-art handoff."
+            --notes "Debug-signed dev flavour with the output level slider and the Automix cover-art handoff. $(cat signer.txt)"
