@@ -15,8 +15,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.BlurEffect
-import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
@@ -78,8 +76,6 @@ internal class AutomixArtMix {
 internal fun Modifier.automixHidden(mix: AutomixArtMix): Modifier = graphicsLayer {
     if (mix.active) alpha = 0f
 }
-
-private const val BLUR_PX = 36f
 
 /** Used when a blend doesn't say how long it lasts. */
 private const val FALLBACK_DURATION_MS = 6000
@@ -144,26 +140,41 @@ internal fun rememberAutomixArtMix(
 }
 
 /**
- * The sleeve while a blend is drawing it: the next cover underneath, sharpening
- * as it arrives, and the old one over it, softening as it fades away, so the two
- * run together rather than one being swapped for the other. Draws nothing when no
- * blend is running.
+ * The cover while a blend is drawing it, in Apple Music's choreography: the
+ * old cover holds at full strength for the first quarter of the mix, dissolves
+ * into the next one across the middle half, and the next one has it to itself
+ * for the last quarter. Over the same stretch the old cover recedes a little
+ * (to 96%) while the new one settles up to full size, which gives the swap some
+ * weight instead of a flat fade. Draws nothing when no blend is running.
  *
- * The old cover is faded out over an opaque new one rather than the new one faded
- * in beneath it: cross-fading two partly transparent layers dips the picture
- * mid-way over the sleeve's dark backing, and this never does.
+ * No blur here: the swirling backdrop behind carries the soft look, and plain
+ * layers are the cheapest thing a GPU can composite. The old cover fades out
+ * over an opaque new one rather than the new one fading in beneath it:
+ * cross-fading two partly transparent layers dips the picture mid-way over the
+ * dark backing behind, and this never does.
+ *
+ * [hero] draws it as the full-bleed banner rather than the card: no corners,
+ * no breathing scale (the banner is cropped to the stage), and [imageModifier]
+ * carries the banner's own crop so both covers sit exactly where it does.
  */
 @Composable
-internal fun AutomixBleedArt(mix: AutomixArtMix, modifier: Modifier = Modifier) {
+internal fun AutomixBleedArt(
+    mix: AutomixArtMix,
+    modifier: Modifier = Modifier,
+    hero: Boolean = false,
+    imageModifier: Modifier = Modifier,
+) {
     val incoming = mix.incoming ?: return
     val outgoing = mix.outgoing ?: return
     Box(
         modifier = modifier
             .fillMaxSize()
-            .graphicsLayer {
-                shape = SleeveCorners
-                clip = true
-            },
+            .then(
+                if (hero) Modifier else Modifier.graphicsLayer {
+                    shape = SleeveCorners
+                    clip = true
+                },
+            ),
     ) {
         AsyncImage(
             model = incoming,
@@ -172,9 +183,13 @@ internal fun AutomixBleedArt(mix: AutomixArtMix, modifier: Modifier = Modifier) 
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer {
-                    val blur = BLUR_PX * (1f - mix.progress.value)
-                    renderEffect = if (blur > 0.5f) BlurEffect(blur, blur, TileMode.Clamp) else null
-                },
+                    if (!hero) {
+                        val s = BREATH_MIN + (1f - BREATH_MIN) * dissolve(mix.progress.value)
+                        scaleX = s
+                        scaleY = s
+                    }
+                }
+                .then(imageModifier),
         )
         AsyncImage(
             model = outgoing,
@@ -183,11 +198,24 @@ internal fun AutomixBleedArt(mix: AutomixArtMix, modifier: Modifier = Modifier) 
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer {
-                    val p = mix.progress.value
-                    alpha = 1f - p
-                    val blur = BLUR_PX * p
-                    renderEffect = if (blur > 0.5f) BlurEffect(blur, blur, TileMode.Clamp) else null
-                },
+                    val d = dissolve(mix.progress.value)
+                    alpha = 1f - d
+                    if (!hero) {
+                        val s = 1f - (1f - BREATH_MIN) * d
+                        scaleX = s
+                        scaleY = s
+                    }
+                }
+                .then(imageModifier),
         )
     }
 }
+
+/** How far the dissolve has got: 0 until a quarter of the mix, 1 from three quarters, smooth between. */
+private fun dissolve(p: Float): Float {
+    val x = ((p - 0.25f) / 0.5f).coerceIn(0f, 1f)
+    return x * x * (3f - 2f * x)
+}
+
+/** The size the cover recedes to, and the new one settles up from. */
+private const val BREATH_MIN = 0.96f

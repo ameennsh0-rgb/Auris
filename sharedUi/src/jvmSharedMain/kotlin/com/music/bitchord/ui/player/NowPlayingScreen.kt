@@ -276,6 +276,27 @@ private const val HERO_ART_ZOOM = 1.234f
  * top-centre origin, so the zoom and the drift are one transform.
  */
 private const val HERO_ART_DRIFT = 0.016f
+
+/**
+ * The banner's crop of the cover, shared by the player's own cover and the
+ * Automix blend so both land on the same pixels.
+ *
+ * The stage is taller by [HERO_ART_ZOOM], so in portrait Crop already supplies
+ * the scale the removed layer did. Where the stage is still width-bound, the
+ * banner shorter than the player is wide, Crop cannot, and the zoom is put back.
+ * Top-centre, then drift: the crop grows at the bottom rather than lifting the
+ * art off the status bar.
+ */
+private fun androidx.compose.ui.graphics.GraphicsLayerScope.applyHeroCrop() {
+    val oldBottom = size.height / HERO_ART_ZOOM
+    val zoom = maxOf(size.width, oldBottom) * HERO_ART_ZOOM /
+        maxOf(size.width, size.height)
+    scaleX = zoom
+    scaleY = zoom
+    transformOrigin = TransformOrigin(0.5f, 0f)
+    translationY = size.width * HERO_ART_DRIFT
+}
+
 /**
  * How far the mesh's dissolve seam sits below the banner's bottom edge. The
  * wash reading as starting at the artwork's own boundary made the blurred
@@ -3203,7 +3224,7 @@ fun NowPlayingScreen(
                         // [PlayerArtwork.loaded] still flips the moment it does.
                         modifier = Modifier
                             .fillMaxSize()
-                            .then(if (heroMode) Modifier else Modifier.automixHidden(automixArt))
+                            .then(Modifier.automixHidden(automixArt))
                             // In the banner, Crop still takes the tighter slice
                             // the old [HERO_ART_ZOOM] layer took — the stage is
                             // taller by exactly that factor, so the same source
@@ -3211,31 +3232,19 @@ fun NowPlayingScreen(
                             // the credits now stand on, is uncovered. The sleeve
                             // keeps its fitted card; the crop is a banner idea.
                             .then(
-                                if (heroMode) Modifier.graphicsLayer {
-                                    // The stage is taller by [HERO_ART_ZOOM],
-                                    // so in portrait Crop already supplies the
-                                    // scale the removed layer did. Where the
-                                    // stage is still width-bound — the banner
-                                    // shorter than the player is wide — Crop
-                                    // cannot, and the zoom is put back.
-                                    val oldBottom = size.height / HERO_ART_ZOOM
-                                    val zoom = maxOf(size.width, oldBottom) * HERO_ART_ZOOM /
-                                        maxOf(size.width, size.height)
-                                    scaleX = zoom
-                                    scaleY = zoom
-                                    // Top-centre, then drift: the crop grows at
-                                    // the bottom rather than lifting the art off
-                                    // the status bar.
-                                    transformOrigin = TransformOrigin(0.5f, 0f)
-                                    translationY = size.width * HERO_ART_DRIFT
-                                } else Modifier,
+                                if (heroMode) Modifier.graphicsLayer { applyHeroCrop() } else Modifier,
                             )
                             .drawWithContent { if (art.loaded || !canvasRendered) drawContent() },
                     )
+
                     // While an Automix blend runs, the sleeve is drawn here: the
                     // next cover bleeding in over the one being left. Draws
                     // nothing the rest of the time.
-                    if (!heroMode) AutomixBleedArt(automixArt)
+                    AutomixBleedArt(
+                        mix = automixArt,
+                        hero = heroMode,
+                        imageModifier = if (heroMode) Modifier.graphicsLayer { applyHeroCrop() } else Modifier,
+                    )
 
                     // Where the clip plays when it can't have the banner:
                     // inside the same clip as the still art, taking the
