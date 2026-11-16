@@ -1345,7 +1345,10 @@ fun NowPlayingScreen(
     // Apple Music-style handoff between covers while Automix blends two
     // tracks — see [AutomixArtMix]. Only the sleeve takes it; the full-bleed
     // banner keeps the ordinary fade.
-    val automixArt = rememberAutomixArtMix(art, mixing)
+    val mixBlend by PlayerSettings.smartMixBlend.collectAsStateWithLifecycle()
+    // The cover of the song the blend is heading for, loaded before it is needed.
+    val nextArt = rememberPlayerArtwork(rememberRemoteArtworkUrl(queue.getOrNull(queueIndex + 1)))
+    val automixArt = rememberAutomixArtMix(art, nextArt, mixing, mixBlend)
     // Sticky, unlike [PlayerArtwork.loaded]: the banner is the shape of the player rather
     // than a property of the track in it. Waiting on each new cover would
     // collapse the banner into a card and blow it back out on every skip —
@@ -3172,7 +3175,7 @@ fun NowPlayingScreen(
                         // [PlayerArtwork.loaded] still flips the moment it does.
                         modifier = Modifier
                             .fillMaxSize()
-                            .then(if (heroMode) Modifier else Modifier.automixIncoming(automixArt))
+                            .then(if (heroMode) Modifier else Modifier.automixHidden(automixArt))
                             // In the banner, Crop still takes the tighter slice
                             // the old [HERO_ART_ZOOM] layer took — the stage is
                             // taller by exactly that factor, so the same source
@@ -3201,9 +3204,10 @@ fun NowPlayingScreen(
                             )
                             .drawWithContent { if (art.loaded || !canvasRendered) drawContent() },
                     )
-                    // The cover being left behind by an Automix blend, over the new
-                    // one while it recedes. Draws nothing the rest of the time.
-                    if (!heroMode) AutomixOutgoingArt(automixArt)
+                    // While an Automix blend runs, the sleeve is drawn here: the
+                    // next cover bleeding in over the one being left. Draws
+                    // nothing the rest of the time.
+                    if (!heroMode) AutomixBleedArt(automixArt)
 
                     // Where the clip plays when it can't have the banner:
                     // inside the same clip as the still art, taking the

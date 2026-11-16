@@ -54,4 +54,10 @@ data class MixBlend(
     val beatAnchorNanos: Long,
     /** Whether the blend is playing rather than paused; a paused blend holds still. */
     val playing: Boolean,
+    /**
+     * How long the blend lasts in wall-clock time, from the first overlapping
+     * beat to the last, or 0 when it isn't known. Lets the player pace anything
+     * that should run alongside the blend, the cover art for one, to the blend itself.
+     */
+    val fadeMs: Long = 0L,
 )

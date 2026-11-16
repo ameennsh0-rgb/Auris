@@ -1619,6 +1619,9 @@ class CrossfadeController(
             beatMs = beatMs,
             beatAnchorNanos = anchor,
             playing = playing,
+            // The blend's own length in wall-clock time: [fadeMs] counts the
+            // outgoing track's time, which runs at its playing speed.
+            fadeMs = (fadeMs / (out.playbackParameters.speed.takeIf { it > 0f } ?: 1f)).toLong(),
         )
     }
 

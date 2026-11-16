@@ -3,6 +3,7 @@ package com.music.bitchord.ui.player
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -21,131 +22,158 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import coil3.compose.rememberAsyncImagePainter
 import coil3.request.ImageRequest
+import com.music.bitchord.data.settings.MixBlend
 
 /**
- * The cover-art handoff that rides along with an Automix blend, in the manner
- * of Apple Music: as one song mixes into the next, the old sleeve softens and
- * bleeds into the new one, colours running together, instead of the picture
- * simply swapping.
+ * The cover art's part in an Automix blend, in the manner of Apple Music: the
+ * cover of the track that is coming bleeds in over the length of the mix,
+ * instead of the picture swapping when the player moves on to the next song.
  *
- * ## How it is driven
+ * ## Why it can't just follow the player's cover
  *
- * Nothing here knows where the blend is — the player only publishes whether
- * one is running — so the motion is a fixed-length ease that starts at the
- * moment the cover changes during (or just after) a blend. A cover that
- * changes any other way (a manual skip, a queue tap) is left to the ordinary
- * fade-in, and so are two tracks off the same album: they share a cover, the
- * player never builds a new [PlayerArtwork] for the second one, and there is
- * nothing to animate.
+ * The player changes its current song halfway through a blend, when the
+ * incoming track becomes the louder one. A cover that follows it therefore
+ * changes in the middle of the mix, all at once. So while a blend runs the
+ * sleeve stops following the player and draws the handoff itself: the cover
+ * being left and the next cover in the queue, cross-dissolved from the moment
+ * the mix starts to the moment it ends, over the blend's own length (read off
+ * [MixBlend.fadeMs]). When the blend ends the sleeve goes back to the player's
+ * cover, which by then is the cover it has just finished drawing.
  *
- * The old cover is drawn *above* the new one and faded out, rather than the new
- * one faded in below it. Cross-fading two partly transparent layers over the
- * sleeve's dark backing dips the picture mid-way; fading one out over an opaque
- * one never does.
+ * The next cover is loaded ahead of time, whenever there is a next song, so
+ * the blend starts on a picture that is already decoded rather than waiting on
+ * one.
+ *
+ * Two tracks off the same album share a cover; there is nothing to bleed
+ * between them and the sleeve is left alone. So is a blend with no length to
+ * pace to being unknown - it falls back to a fixed span - and one with the
+ * "reduce animation" setting on.
  */
 @Stable
 internal class AutomixArtMix {
-    /** The cover being left behind, while it is still on its way out; null otherwise. */
+    /** The cover being left behind; null when no blend is being drawn. */
     var outgoing: ImageRequest? by mutableStateOf(null)
         internal set
 
-    /** 0 as the blend of covers begins, 1 as it ends. Only meaningful while [outgoing] is set. */
-    val progress = Animatable(1f)
+    /** The cover of the next song, the one bleeding in; null when no blend is being drawn. */
+    var incoming: ImageRequest? by mutableStateOf(null)
+        internal set
 
-    /** Memory of the last cover and the last time a blend was running, kept across recompositions. */
-    internal class Tracker {
-        var previous: PlayerArtwork? = null
-        var mixingUntilMs: Long = 0L
-    }
+    /** 0 as the blend of covers begins, 1 as it ends. */
+    val progress = Animatable(0f)
+
+    /** Whether the sleeve is being drawn by the blend rather than by the player's cover. */
+    val active: Boolean get() = outgoing != null && incoming != null
 }
 
-/** The new cover, a little oversized at first and settling into its frame as the handoff runs. */
-internal fun Modifier.automixIncoming(mix: AutomixArtMix): Modifier = graphicsLayer {
-    if (mix.outgoing == null) return@graphicsLayer
-    val settle = 1f - mix.progress.value
-    // Barely any motion: the new cover resolves where the old one was, as a bleed.
-    val scale = 1f + INCOMING_OVERSIZE * settle * settle
-    scaleX = scale
-    scaleY = scale
+/** The player's own cover, hidden for as long as the blend is drawing the sleeve in its place. */
+internal fun Modifier.automixHidden(mix: AutomixArtMix): Modifier = graphicsLayer {
+    if (mix.active) alpha = 0f
 }
 
-private const val INCOMING_OVERSIZE = 0.025f
-private const val OUTGOING_BLUR_PX = 40f
-private const val DURATION_MS = 3200
+private const val BLUR_PX = 36f
 
-/** How long after a blend ends a cover change still counts as part of it. */
-private const val AFTER_MIX_GRACE_MS = 2500L
+/** Used when a blend doesn't say how long it lasts. */
+private const val FALLBACK_DURATION_MS = 6000
+
+/** How quickly a blend that ends early is wound up, so the sleeve isn't left half-mixed. */
+private const val WIND_UP_MS = 350
 
 private val ArtMixEasing = CubicBezierEasing(0.4f, 0f, 0.2f, 1f)
 private val SleeveCorners = RoundedCornerShape(8.dp)
 
-private fun nowMs(): Long = System.nanoTime() / 1_000_000L
-
 /**
- * Builds the handoff state for [art]. When [art] changes to a different cover
- * while [mixing] (or just after), [AutomixArtMix.outgoing] holds the cover
- * being left and [AutomixArtMix.progress] runs from 0 to 1.
+ * Builds the blend state. [art] is the cover on screen now and [next] that of
+ * the next song in the queue; [mixing] and [blend] come from the Automix engine.
  */
 @Composable
-internal fun rememberAutomixArtMix(art: PlayerArtwork, mixing: Boolean): AutomixArtMix {
+internal fun rememberAutomixArtMix(
+    art: PlayerArtwork,
+    next: PlayerArtwork,
+    mixing: Boolean,
+    blend: MixBlend?,
+): AutomixArtMix {
     val mix = remember { AutomixArtMix() }
-    val tracker = remember { AutomixArtMix.Tracker() }
     val reduceAnimation by PlayerSettings.reduceAnimation.collectAsStateWithLifecycle()
+    val artNow by rememberUpdatedState(art)
+    val nextNow by rememberUpdatedState(next)
+    val blendNow by rememberUpdatedState(blend)
     val reduceNow by rememberUpdatedState(reduceAnimation)
 
-    // "Still counts as mixing" is open-ended while a blend runs and closes a
-    // little after it, because the cover can change a beat either side of the
-    // flag flipping.
+    // Held in the image cache ahead of the blend. The painter itself is never
+    // drawn; asking for it is what starts the load.
+    rememberAsyncImagePainter(model = next.request)
+
     LaunchedEffect(mixing) {
-        tracker.mixingUntilMs = if (mixing) Long.MAX_VALUE else nowMs() + AFTER_MIX_GRACE_MS
-    }
-
-    LaunchedEffect(art) {
-        val previous = tracker.previous
-        tracker.previous = art
-        if (previous == null || previous === art) return@LaunchedEffect
-        val from = previous.url
-        val to = art.url
-        if (from == null || to == null || from == to) return@LaunchedEffect
-        if (reduceNow || nowMs() > tracker.mixingUntilMs) return@LaunchedEffect
-
-        mix.outgoing = previous.request
-        try {
+        if (mixing) {
+            val from = artNow
+            val to = nextNow
+            val fromUrl = from.url
+            val toUrl = to.url
+            if (reduceNow || fromUrl == null || toUrl == null || fromUrl == toUrl) return@LaunchedEffect
+            val durationMs = (blendNow?.fadeMs ?: 0L).takeIf { it > 0L }?.toInt() ?: FALLBACK_DURATION_MS
+            mix.outgoing = from.request
+            mix.incoming = to.request
             mix.progress.snapTo(0f)
-            mix.progress.animateTo(1f, tween(DURATION_MS, easing = ArtMixEasing))
-        } finally {
-            // Also runs when a newer cover cancels this one; the next run
-            // starts from 0 again, so no reset of [progress] is needed here.
+            mix.progress.animateTo(1f, tween(durationMs, easing = ArtMixEasing))
+        } else if (mix.active) {
+            // The blend ended - or was dropped - with the covers part-way; wind
+            // them up, then hand the sleeve back to the player's cover.
+            mix.progress.animateTo(1f, tween(WIND_UP_MS))
             mix.outgoing = null
+            mix.incoming = null
         }
     }
     return mix
 }
 
 /**
- * The outgoing cover, laid over the new one for the length of the handoff. Draws
- * nothing when there is no handoff running.
+ * The sleeve while a blend is drawing it: the next cover underneath, sharpening
+ * as it arrives, and the old one over it, softening as it fades away, so the two
+ * run together rather than one being swapped for the other. Draws nothing when no
+ * blend is running.
+ *
+ * The old cover is faded out over an opaque new one rather than the new one faded
+ * in beneath it: cross-fading two partly transparent layers dips the picture
+ * mid-way over the sleeve's dark backing, and this never does.
  */
 @Composable
-internal fun AutomixOutgoingArt(mix: AutomixArtMix, modifier: Modifier = Modifier) {
-    val request = mix.outgoing ?: return
-    AsyncImage(
-        model = request,
-        contentDescription = null,
-        contentScale = ContentScale.Crop,
+internal fun AutomixBleedArt(mix: AutomixArtMix, modifier: Modifier = Modifier) {
+    val incoming = mix.incoming ?: return
+    val outgoing = mix.outgoing ?: return
+    Box(
         modifier = modifier
             .fillMaxSize()
             .graphicsLayer {
-                val p = mix.progress.value
-                // The old cover stays full size and melts into the new one:
-                // it softens as it fades, so the colours run together rather
-                // than one picture being swapped for the other.
-                alpha = 1f - p
-                val blur = OUTGOING_BLUR_PX * p
-                renderEffect = if (blur > 0.5f) BlurEffect(blur, blur, TileMode.Clamp) else null
                 shape = SleeveCorners
                 clip = true
             },
-    )
+    ) {
+        AsyncImage(
+            model = incoming,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    val blur = BLUR_PX * (1f - mix.progress.value)
+                    renderEffect = if (blur > 0.5f) BlurEffect(blur, blur, TileMode.Clamp) else null
+                },
+        )
+        AsyncImage(
+            model = outgoing,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    val p = mix.progress.value
+                    alpha = 1f - p
+                    val blur = BLUR_PX * p
+                    renderEffect = if (blur > 0.5f) BlurEffect(blur, blur, TileMode.Clamp) else null
+                },
+        )
+    }
 }
