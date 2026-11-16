@@ -96,6 +96,17 @@ class PrecisionAudioSink(
 
     private var processCounter: Long = 0L
 
+    /** The last source/target pair reported, so a live output-level change can re-report exactness. */
+    @Volatile
+    private var lastExactnessPair: Pair<PcmEncoding, PcmEncoding>? = null
+
+    init {
+        dspChain.outputGain.onEngagedChanged = {
+            val pair = lastExactnessPair
+            if (pair != null && isAudible()) publishOutputExactness(pair.first, pair.second)
+        }
+    }
+
     /** Sample rate of the configured format, for timestamping split sub-blocks. */
     private var configuredSampleRate: Int = 0
 
@@ -457,6 +468,7 @@ class PrecisionAudioSink(
         targetOutputEncoding = null
         activeFormat = null
         configuredSampleRate = 0
+        lastExactnessPair = null
         if (isAudible()) {
             AudioOutputStatus.publishOutputExactness(exact = false, detail = null)
             AudioOutputStatus.publishDsp(
@@ -629,15 +641,21 @@ class PrecisionAudioSink(
      * that while [DefaultAudioSink] is doing the writing.
      */
     private fun publishOutputExactness(source: PcmEncoding, target: PcmEncoding) {
-        val exact = when (source) {
+        lastExactnessPair = source to target
+        val formatExact = when (source) {
             PcmEncoding.PCM_16BIT -> target == PcmEncoding.PCM_16BIT
             PcmEncoding.PCM_24BIT_PACKED -> target == PcmEncoding.PCM_FLOAT
             PcmEncoding.PCM_FLOAT -> target == PcmEncoding.PCM_FLOAT
             // 24 bits of significand cannot hold 32.
             PcmEncoding.PCM_32BIT -> false
         }
+        // A digital output level below 0 dB multiplies every sample, so what
+        // reaches the DAC is no longer the file's own values.
+        val gainEngaged = OutputGain.engaged
+        val exact = formatExact && !gainEngaged
         val sourceLabel = encodingLabel(mapFromPcmEncoding(source))
         val detail = when {
+            gainEngaged -> "Output level ${"%.1f".format(OutputGain.db)} dB applied (digital volume)"
             exact -> "$sourceLabel → ${encodingLabel(mapFromPcmEncoding(target))}"
             source == PcmEncoding.PCM_32BIT ->
                 "32-bit PCM exceeds what AudioTrack can carry; 8 bits lost"

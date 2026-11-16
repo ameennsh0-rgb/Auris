@@ -14,6 +14,7 @@ import com.music.bitchord.data.canvas.SpotifyToken
 import com.music.bitchord.data.lyrics.LyricsSource
 import com.music.bitchord.data.sources.SourceKind
 import com.music.bitchord.playback.EqLayout
+import com.music.bitchord.playback.audio.OutputGain
 import com.music.bitchord.playback.EqualizerPreset
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -293,6 +294,13 @@ object AppSettings {
 
     /** Skip loudness normalization while the active output is the phone's own speaker. */
     val loudnessOffOnSpeaker = MutableStateFlow(true)
+
+    /**
+     * The app's own digital output level in dB, 0 down to
+     * [com.music.bitchord.playback.audio.OutputGain.MIN_DB]. For DACs the system
+     * volume cannot reach; 0 leaves the signal untouched.
+     */
+    val outputGainDb = MutableStateFlow(0f)
 
     /**
      * Whether a source offering a Dolby Atmos rendition is allowed to serve it.
@@ -937,6 +945,8 @@ object AppSettings {
         preferUsbDac.value = prefs.getBoolean(KEY_PREFER_USB_DAC, false)
         loudnessNormalization.value = prefs.getBoolean(KEY_LOUDNESS_NORMALIZATION, true)
         loudnessOffOnSpeaker.value = prefs.getBoolean(KEY_LOUDNESS_OFF_ON_SPEAKER, true)
+        outputGainDb.value = prefs.getFloat(KEY_OUTPUT_GAIN_DB, 0f).coerceIn(OutputGain.MIN_DB, 0f)
+        OutputGain.setDb(outputGainDb.value)
         dolbyAtmos.value = prefs.getBoolean(KEY_DOLBY_ATMOS, true)
         spatialAudio.value = prefs.getBoolean(KEY_SPATIAL_AUDIO, false)
         singLevel.value = prefs.getFloat(KEY_SING_LEVEL, 0f).coerceIn(0f, 1f)
@@ -1746,6 +1756,13 @@ object AppSettings {
         prefs.edit().putBoolean(KEY_LOUDNESS_OFF_ON_SPEAKER, value).apply()
     }
 
+    fun setOutputGainDb(value: Float) {
+        val db = value.coerceIn(OutputGain.MIN_DB, 0f)
+        outputGainDb.value = db
+        OutputGain.setDb(db)
+        prefs.edit().putFloat(KEY_OUTPUT_GAIN_DB, db).apply()
+    }
+
     fun setLoudnessNormalization(value: Boolean) {
         loudnessNormalization.value = value
         prefs.edit().putBoolean(KEY_LOUDNESS_NORMALIZATION, value).apply()
@@ -2200,6 +2217,7 @@ object AppSettings {
     private const val KEY_PREFER_USB_DAC = "prefer_usb_dac"
     private const val KEY_LOUDNESS_NORMALIZATION = "loudness_normalization"
     private const val KEY_LOUDNESS_OFF_ON_SPEAKER = "loudness_off_on_speaker"
+    private const val KEY_OUTPUT_GAIN_DB = "output_gain_db"
     private const val KEY_DOLBY_ATMOS = "dolby_atmos"
     private const val KEY_SPATIAL_AUDIO = "spatial_audio"
     /** Sticky: read back at every launch, written only by [setOfflineMode]. */

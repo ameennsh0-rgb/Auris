@@ -12,7 +12,7 @@ import com.music.bitchord.playback.VocalCutProcessor
  * Composite DSP chain executing BitChord's custom audio processors in their canonical sequence:
  *
  * AudioBlock(Float32) -> VocalCutProcessor -> SpatialAudioProcessor -> EqualizerProcessor
- *   -> TransitionFilterProcessor -> LoudnessProcessor -> AudioBlock(Float32)
+ *   -> TransitionFilterProcessor -> LoudnessProcessor -> OutputGainProcessor -> AudioBlock(Float32)
  *
  * Sing's vocal cut runs first: it removes the center the other stages would
  * otherwise widen, equalise and level along with everything else.
@@ -39,6 +39,7 @@ class DspChain(
     val equalizer: EqualizerProcessor = EqualizerProcessor(),
     val transition: TransitionFilterProcessor = TransitionFilterProcessor(),
     val loudness: LoudnessProcessor = LoudnessProcessor(),
+    val outputGain: OutputGainProcessor = OutputGainProcessor(),
 ) : FloatAudioProcessor {
 
     private var currentSampleRate: Int = 0
@@ -51,6 +52,7 @@ class DspChain(
         equalizer.configure(sampleRate, channelCount)
         transition.configure(sampleRate, channelCount)
         loudness.configure(sampleRate, channelCount)
+        outputGain.configure(sampleRate, channelCount)
     }
 
     /** A new track has begun gaplessly on this sink; see [LoudnessProcessor.onStreamBoundary]. */
@@ -86,6 +88,9 @@ class DspChain(
         equalizer.process(block)
         transition.process(block)
         loudness.process(block)
+        // Last of all: a plain attenuation that can only lower what the
+        // limiter above has already approved. Parked at 0 dB.
+        outputGain.process(block)
     }
 
     @Suppress("DEPRECATION")
@@ -95,6 +100,7 @@ class DspChain(
         equalizer.flush()
         transition.flush()
         loudness.flush()
+        outputGain.flush()
     }
 
     override fun reset() {
@@ -104,6 +110,7 @@ class DspChain(
         equalizer.reset()
         transition.reset()
         loudness.reset()
+        outputGain.reset()
     }
 
     companion object {

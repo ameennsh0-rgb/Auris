@@ -226,6 +226,7 @@ fun SettingsScreen(
     val preferUsbDac by AppSettings.preferUsbDac.collectAsStateWithLifecycle()
     val loudnessNormalization by AppSettings.loudnessNormalization.collectAsStateWithLifecycle()
     val loudnessOffOnSpeaker by AppSettings.loudnessOffOnSpeaker.collectAsStateWithLifecycle()
+    val outputGainDb by AppSettings.outputGainDb.collectAsStateWithLifecycle()
     val outputStatus by AudioOutputStatus.current.collectAsStateWithLifecycle()
     val playingFormat by NerdStats.current.collectAsStateWithLifecycle()
     val playingDolbyAtmos = playingFormat?.isDolbyAtmos == true
@@ -656,6 +657,23 @@ fun SettingsScreen(
                     title = loudnessSpeakerTitle,
                     checked = loudnessOffOnSpeaker,
                     onCheckedChange = AppSettings::setLoudnessOffOnSpeaker,
+                )
+            }
+            val outputLevelTitle = stringResource(R.string.output_level)
+            row(outputLevelTitle, "volume", "gain", "level", "attenuation", "dac", "digital volume") {
+                SliderRow(
+                    icon = Icons.Rounded.VolumeUp,
+                    title = outputLevelTitle,
+                    subtitle = stringResource(R.string.output_level_subtitle),
+                    value = if (outputGainDb > -0.05f) {
+                        stringResource(R.string.output_level_unity)
+                    } else {
+                        "%.1f dB".format(outputGainDb)
+                    },
+                    sliderValue = outputGainDb,
+                    onSliderValue = { AppSettings.setOutputGainDb((it * 2f).roundToInt() / 2f) },
+                    valueRange = com.music.bitchord.playback.audio.OutputGain.MIN_DB..0f,
+                    steps = 0,
                 )
             }
             // Automix decides its own length from each pair of tracks —
