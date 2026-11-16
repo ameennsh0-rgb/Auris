@@ -1725,7 +1725,7 @@ fun NowPlayingScreen(
     // the banner's own bottom edge, and out of a clip drawn as the backdrop.
     val reduceAnimationNow by PlayerSettings.reduceAnimation.collectAsStateWithLifecycle()
     val fluidSupported = PlayerPlatform.host.supportsFluidBackdrop
-    val fluidBackdrop = fluidSupported && !heroMode && !canvasFirstPortrait && !spotifyCanvasPresentation
+    val fluidBackdrop = fluidSupported && !canvasFirstPortrait && !spotifyCanvasPresentation
     // The covers either side of a blend while one runs, the one on screen
     // otherwise, each as the same tiny pre-blurred bitmap the lyrics backdrop
     // uses. The next song's is made ahead, so a blend starts on a cover that is
