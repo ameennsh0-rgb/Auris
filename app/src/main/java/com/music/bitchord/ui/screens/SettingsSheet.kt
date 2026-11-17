@@ -225,6 +225,8 @@ fun SettingsScreen(
     val sessionId by AppSettings.audioSessionId.collectAsStateWithLifecycle()
     val outputPcmMode by AppSettings.outputPcmMode.collectAsStateWithLifecycle()
     val preferUsbDac by AppSettings.preferUsbDac.collectAsStateWithLifecycle()
+    val bitPerfectOutput by AppSettings.bitPerfectOutput.collectAsStateWithLifecycle()
+    val bitPerfectActive by AppSettings.bitPerfectActive.collectAsStateWithLifecycle()
     val loudnessNormalization by AppSettings.loudnessNormalization.collectAsStateWithLifecycle()
     val loudnessOffOnSpeaker by AppSettings.loudnessOffOnSpeaker.collectAsStateWithLifecycle()
     val outputGainDb by AppSettings.outputGainDb.collectAsStateWithLifecycle()
@@ -631,6 +633,14 @@ fun SettingsScreen(
                     checked = preferUsbDac,
                     onCheckedChange = AppSettings::setPreferUsbDac,
                     badge = stringResource(R.string.connected).takeIf { outputStatus.isUsb },
+                )
+            }
+            row("Bit-perfect USB output", "bit perfect", "bitperfect", "usb", "dac", "resample") {
+                SettingsSubRow(
+                    title = "Bit-perfect USB output",
+                    checked = bitPerfectOutput,
+                    onCheckedChange = AppSettings::setBitPerfectOutput,
+                    badge = "Active".takeIf { bitPerfectActive },
                 )
             }
             val loudnessTitle = stringResource(R.string.loudness_normalization)

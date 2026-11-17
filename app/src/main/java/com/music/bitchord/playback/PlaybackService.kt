@@ -5945,12 +5945,65 @@ class PlaybackService : MediaLibraryService() {
      * API. This does not bypass the system USB driver: it intentionally lets
      * Android negotiate only formats the connected DAC actually advertises.
      */
+    private var bitPerfectDevice: AudioDeviceInfo? = null
+
+    /**
+     * Android 14+ can give an app a bit-perfect mixer on a USB DAC: the system
+     * stops resampling to its own rate and stops applying its software volume,
+     * so the DAC receives the track's own samples. Requested only for USB, and
+     * only when the user asked; cleared again otherwise.
+     */
+    private fun applyBitPerfectMixer(device: AudioDeviceInfo?) {
+        val manager = audioManager ?: return
+        if (android.os.Build.VERSION.SDK_INT < 34) {
+            AppSettings.bitPerfectActive.value = false
+            return
+        }
+        val attrs = android.media.AudioAttributes.Builder()
+            .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
+            .build()
+        val usb = device?.takeIf {
+            it.type == AudioDeviceInfo.TYPE_USB_DEVICE || it.type == AudioDeviceInfo.TYPE_USB_HEADSET
+        }
+        runCatching {
+            val old = bitPerfectDevice
+            if (old != null && (usb == null || old.id != usb.id || !AppSettings.bitPerfectOutput.value)) {
+                manager.clearPreferredMixerAttributes(attrs, old)
+                bitPerfectDevice = null
+            }
+            if (!AppSettings.bitPerfectOutput.value || usb == null) {
+                AppSettings.bitPerfectActive.value = false
+                return
+            }
+            val rate = currentAudioInputFormat?.sampleRate?.takeIf { it > 0 } ?: lastReportedSampleRateHz()
+            val options = manager.getSupportedMixerAttributes(usb).filter {
+                it.mixerBehavior == android.media.AudioMixerAttributes.MIXER_BEHAVIOR_BIT_PERFECT
+            }
+            val pick = options.filter { rate == null || it.format.sampleRate == rate }
+                .maxByOrNull { it.format.encoding }
+                ?: options.maxByOrNull { it.format.sampleRate }
+            if (pick == null) {
+                android.util.Log.w("BitPerfect", "DAC offers no bit-perfect mixer attributes")
+                AppSettings.bitPerfectActive.value = false
+                return
+            }
+            val ok = manager.setPreferredMixerAttributes(attrs, usb, pick)
+            bitPerfectDevice = usb.takeIf { ok }
+            AppSettings.bitPerfectActive.value = ok
+            android.util.Log.i("BitPerfect", "set=$ok rate=${pick.format.sampleRate} enc=${pick.format.encoding}")
+        }.onFailure {
+            android.util.Log.w("BitPerfect", "mixer request failed", it)
+            AppSettings.bitPerfectActive.value = false
+        }
+    }
     private fun applyOutputRoute() {
         val manager = audioManager ?: return
         val usb = preferredUsbDevice()
         val chosen = AudioRouting.infoFor(manager, AudioRouting.selectedId.value)
         val preferred = chosen ?: usb.takeIf { AppSettings.preferUsbDac.value }
         eachPlayer { it.setPreferredAudioDevice(preferred) }
+        applyBitPerfectMixer(preferred ?: resolveActiveOutputDevice())
 
         val activeDevice = resolveActiveOutputDevice()
         val routeKind = resolveActiveRouteKind(activeDevice)
@@ -6248,6 +6301,9 @@ class PlaybackService : MediaLibraryService() {
         }
         scope.launch {
             AppSettings.preferUsbDac.drop(1).collect { requestOutputReconfiguration() }
+        }
+        scope.launch {
+            AppSettings.bitPerfectOutput.drop(1).collect { requestOutputReconfiguration() }
         }
         scope.launch {
             AudioRouting.selectedId.drop(1).collect { requestOutputReconfiguration() }

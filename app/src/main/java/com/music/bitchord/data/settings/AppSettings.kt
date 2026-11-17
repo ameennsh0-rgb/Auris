@@ -269,6 +269,10 @@ object AppSettings {
 
     /** Prefer an attached USB audio output over the system's normal route. */
     val preferUsbDac = MutableStateFlow(false)
+    /** Ask Android for a bit-perfect USB mixer (API 34+): no resampling, no system volume. */
+    val bitPerfectOutput = MutableStateFlow(false)
+    /** Set by the playback service: the system granted a bit-perfect mixer. */
+    val bitPerfectActive = MutableStateFlow(false)
 
     /**
      * Level every track to the same loudness, using YouTube's own
@@ -946,6 +950,7 @@ object AppSettings {
             )
         }.getOrDefault(OutputPcmMode.PCM_16)
         preferUsbDac.value = prefs.getBoolean(KEY_PREFER_USB_DAC, false)
+        bitPerfectOutput.value = prefs.getBoolean(KEY_BIT_PERFECT_OUTPUT, false)
         loudnessNormalization.value = prefs.getBoolean(KEY_LOUDNESS_NORMALIZATION, true)
         loudnessOffOnSpeaker.value = prefs.getBoolean(KEY_LOUDNESS_OFF_ON_SPEAKER, true)
         outputGainDb.value = prefs.getFloat(KEY_OUTPUT_GAIN_DB, 0f).coerceIn(OutputGain.MIN_DB, 0f)
@@ -1761,6 +1766,11 @@ object AppSettings {
         prefs.edit().putBoolean(KEY_PREFER_USB_DAC, value).apply()
     }
 
+    fun setBitPerfectOutput(value: Boolean) {
+        bitPerfectOutput.value = value
+        prefs.edit().putBoolean(KEY_BIT_PERFECT_OUTPUT, value).apply()
+    }
+
     fun setLoudnessOffOnSpeaker(value: Boolean) {
         loudnessOffOnSpeaker.value = value
         prefs.edit().putBoolean(KEY_LOUDNESS_OFF_ON_SPEAKER, value).apply()
@@ -2225,6 +2235,7 @@ object AppSettings {
     private const val KEY_SKIP_SILENCE = "skip_silence"
     private const val KEY_OUTPUT_PCM_MODE = "output_pcm_mode"
     private const val KEY_PREFER_USB_DAC = "prefer_usb_dac"
+    private const val KEY_BIT_PERFECT_OUTPUT = "bit_perfect_output"
     private const val KEY_LOUDNESS_NORMALIZATION = "loudness_normalization"
     private const val KEY_LOUDNESS_OFF_ON_SPEAKER = "loudness_off_on_speaker"
     private const val KEY_OUTPUT_GAIN_DB = "output_gain_db"
